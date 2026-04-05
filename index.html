@@ -1,0 +1,558 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PT 專業諮詢｜值班績效儀表板</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+  :root {
+    --bg: #f0f2f5;
+    --card: #ffffff;
+    --primary: #2563eb;
+    --primary-light: #dbeafe;
+    --success: #16a34a;
+    --warning: #ea580c;
+    --danger: #dc2626;
+    --text: #1e293b;
+    --text-muted: #64748b;
+    --border: #e2e8f0;
+    --shadow: 0 1px 3px rgba(0,0,0,.08), 0 1px 2px rgba(0,0,0,.06);
+    --radius: 12px;
+  }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans TC", sans-serif; background:var(--bg); color:var(--text); line-height:1.5; }
+
+  /* Header */
+  .header { background:linear-gradient(135deg,#1e3a5f,#2563eb); color:#fff; padding:24px 32px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px; }
+  .header h1 { font-size:22px; font-weight:700; letter-spacing:.5px; }
+  .header-meta { font-size:13px; opacity:.85; }
+  .btn-refresh { background:#fff; color:var(--primary); border:none; padding:10px 20px; border-radius:8px; font-weight:600; font-size:14px; cursor:pointer; display:flex; align-items:center; gap:6px; transition:all .2s; }
+  .btn-refresh:hover { transform:translateY(-1px); box-shadow:0 4px 12px rgba(0,0,0,.15); }
+  .btn-refresh.loading { opacity:.6; pointer-events:none; }
+  .btn-refresh .spinner { display:none; width:16px; height:16px; border:2px solid var(--primary); border-top-color:transparent; border-radius:50%; animation:spin .6s linear infinite; }
+  .btn-refresh.loading .spinner { display:inline-block; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+
+  /* Layout */
+  .container { max-width:1400px; margin:0 auto; padding:20px; }
+  .filters { background:var(--card); border-radius:var(--radius); padding:16px 20px; margin-bottom:20px; box-shadow:var(--shadow); display:flex; flex-wrap:wrap; gap:12px; align-items:center; }
+  .filters label { font-size:13px; font-weight:600; color:var(--text-muted); }
+  .filters input, .filters select { padding:8px 12px; border:1px solid var(--border); border-radius:8px; font-size:14px; outline:none; }
+  .filters input:focus, .filters select:focus { border-color:var(--primary); box-shadow:0 0 0 3px var(--primary-light); }
+  .filter-group { display:flex; align-items:center; gap:6px; }
+  .quick-btns { display:flex; gap:6px; margin-left:auto; }
+  .quick-btn { padding:6px 14px; border:1px solid var(--border); border-radius:6px; font-size:13px; cursor:pointer; background:#fff; color:var(--text); transition:all .15s; }
+  .quick-btn:hover, .quick-btn.active { background:var(--primary); color:#fff; border-color:var(--primary); }
+
+  /* KPI Cards */
+  .kpi-row { display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:16px; margin-bottom:20px; }
+  .kpi-card { background:var(--card); border-radius:var(--radius); padding:20px; box-shadow:var(--shadow); position:relative; overflow:hidden; }
+  .kpi-card::before { content:''; position:absolute; top:0; left:0; right:0; height:4px; }
+  .kpi-card:nth-child(1)::before { background:var(--primary); }
+  .kpi-card:nth-child(2)::before { background:var(--success); }
+  .kpi-card:nth-child(3)::before { background:var(--warning); }
+  .kpi-card:nth-child(4)::before { background:var(--danger); }
+  .kpi-card:nth-child(5)::before { background:#8b5cf6; }
+  .kpi-label { font-size:13px; color:var(--text-muted); font-weight:500; margin-bottom:6px; }
+  .kpi-value { font-size:28px; font-weight:700; }
+  .kpi-sub { font-size:12px; color:var(--text-muted); margin-top:4px; }
+
+  /* Charts */
+  .chart-grid { display:grid; grid-template-columns:1fr 1fr; gap:20px; margin-bottom:20px; }
+  .chart-card { background:var(--card); border-radius:var(--radius); padding:20px; box-shadow:var(--shadow); }
+  .chart-card h3 { font-size:15px; font-weight:600; margin-bottom:12px; color:var(--text); }
+  .chart-card canvas { width:100%!important; }
+  .chart-full { grid-column:1/-1; }
+
+  /* PT Performance Table */
+  .table-card { background:var(--card); border-radius:var(--radius); padding:20px; box-shadow:var(--shadow); margin-bottom:20px; overflow-x:auto; }
+  .table-card h3 { font-size:15px; font-weight:600; margin-bottom:12px; }
+  table { width:100%; border-collapse:collapse; font-size:14px; }
+  th { background:#f8fafc; padding:10px 12px; text-align:left; font-weight:600; font-size:13px; color:var(--text-muted); border-bottom:2px solid var(--border); white-space:nowrap; }
+  td { padding:10px 12px; border-bottom:1px solid var(--border); }
+  tr:hover td { background:#f8fafc; }
+  .pt-badge { display:inline-block; padding:3px 10px; border-radius:20px; font-size:12px; font-weight:600; }
+  .pt-badge-0 { background:#dbeafe; color:#1d4ed8; }
+  .pt-badge-1 { background:#dcfce7; color:#15803d; }
+  .pt-badge-2 { background:#fef3c7; color:#b45309; }
+  .bar-cell { position:relative; min-width:120px; }
+  .bar-bg { height:22px; border-radius:4px; display:flex; align-items:center; padding:0 8px; font-size:12px; font-weight:600; color:#fff; }
+
+  /* Branch heatmap */
+  .heatmap-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(100px,1fr)); gap:6px; }
+  .heatmap-cell { padding:8px; border-radius:8px; text-align:center; font-size:12px; }
+  .heatmap-cell .branch-name { font-weight:600; margin-bottom:2px; }
+  .heatmap-cell .branch-val { font-size:18px; font-weight:700; }
+
+  @media(max-width:768px){
+    .chart-grid { grid-template-columns:1fr; }
+    .kpi-row { grid-template-columns:repeat(2,1fr); }
+    .filters { flex-direction:column; align-items:stretch; }
+    .quick-btns { margin-left:0; }
+  }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div>
+    <h1>PT 專業諮詢｜值班績效儀表板</h1>
+    <div class="header-meta">資料來源：整發處排班表 ｜ 最後更新：<span id="lastUpdate">--</span></div>
+  </div>
+  <button class="btn-refresh" id="btnRefresh" onclick="refreshData()">
+    <span class="spinner"></span>
+    <span>&#x21bb; 更新數據</span>
+  </button>
+</div>
+
+<div class="container">
+  <!-- Filters -->
+  <div class="filters">
+    <div class="filter-group">
+      <label>開始日期</label>
+      <input type="date" id="dateFrom">
+    </div>
+    <div class="filter-group">
+      <label>結束日期</label>
+      <input type="date" id="dateTo">
+    </div>
+    <div class="filter-group">
+      <label>值班人</label>
+      <select id="ptFilter">
+        <option value="all">全部</option>
+      </select>
+    </div>
+    <div class="filter-group">
+      <label>班次</label>
+      <select id="shiftFilter">
+        <option value="all">全部</option>
+        <option value="早班">早班</option>
+        <option value="午班">午班</option>
+        <option value="晚班">晚班</option>
+      </select>
+    </div>
+    <div class="quick-btns">
+      <button class="quick-btn" data-range="week" onclick="setQuickRange('week')">本週</button>
+      <button class="quick-btn" data-range="month" onclick="setQuickRange('month')">本月</button>
+      <button class="quick-btn" data-range="quarter" onclick="setQuickRange('quarter')">本季</button>
+      <button class="quick-btn" data-range="all" onclick="setQuickRange('all')">全部</button>
+    </div>
+  </div>
+
+  <!-- KPI Cards -->
+  <div class="kpi-row" id="kpiRow"></div>
+
+  <!-- Charts -->
+  <div class="chart-grid">
+    <div class="chart-card">
+      <h3>每日留單趨勢（依值班人）</h3>
+      <canvas id="chartDailyTrend"></canvas>
+    </div>
+    <div class="chart-card">
+      <h3>個人績效比較</h3>
+      <canvas id="chartPTCompare"></canvas>
+    </div>
+    <div class="chart-card">
+      <h3>班次留單分布</h3>
+      <canvas id="chartShift"></canvas>
+    </div>
+    <div class="chart-card">
+      <h3>週趨勢變化</h3>
+      <canvas id="chartWeeklyTrend"></canvas>
+    </div>
+    <div class="chart-card chart-full">
+      <h3>分院留單熱力圖（Top 20）</h3>
+      <div class="heatmap-grid" id="branchHeatmap"></div>
+    </div>
+  </div>
+
+  <!-- PT Detail Table -->
+  <div class="table-card">
+    <h3>值班人績效明細</h3>
+    <table>
+      <thead>
+        <tr>
+          <th>值班人</th>
+          <th>值班次數</th>
+          <th>總留單數</th>
+          <th>平均每班留單</th>
+          <th>最高單班留單</th>
+          <th>涵蓋分院數</th>
+          <th>績效分布</th>
+        </tr>
+      </thead>
+      <tbody id="ptTableBody"></tbody>
+    </table>
+  </div>
+
+  <!-- Daily Detail Table -->
+  <div class="table-card">
+    <h3>每日值班紀錄</h3>
+    <table>
+      <thead>
+        <tr>
+          <th>日期</th>
+          <th>星期</th>
+          <th>班次</th>
+          <th>值班人</th>
+          <th>留單數</th>
+          <th>分院分布</th>
+        </tr>
+      </thead>
+      <tbody id="dailyTableBody"></tbody>
+    </table>
+  </div>
+</div>
+
+<script>
+// ===== DATA =====
+const SHEET_ID = '11say1_H-5jwN8E_zYbSmCEe0kZIQd-miwYWCOJOBiaI';
+const BRANCH_NAMES = ['民生','忠孝新生','天母','內湖','板橋','雙和','林口','新店','三重','古亭','信義','新莊','文心','萬芳','崇德','藝文','蘆洲','黎明','南崁','西門','南京','中壢','竹北','汐止','北大','豐原','博愛明誠','海安','平鎮','文山','頭份','土城','文化中心','大里','南港'];
+const PT_COLORS = { '張盈慧':'#2563eb', '曾鳳君':'#16a34a', '黃婕甯':'#ea580c', '客服':'#8b5cf6' };
+
+let rawData = [];
+let charts = {};
+
+// ===== CSV PARSER =====
+function parseCSV(csv, defaultYear, defaultMonth) {
+  const lines = csv.split('\n').filter(l => l.trim());
+  const rows = [];
+  for (const line of lines) {
+    const row = [];
+    let inQ = false, cell = '';
+    for (let i = 0; i < line.length; i++) {
+      if (line[i] === '"') inQ = !inQ;
+      else if (line[i] === ',' && !inQ) { row.push(cell); cell = ''; }
+      else cell += line[i];
+    }
+    row.push(cell);
+    const ds = row[0];
+    if (!ds || !ds.match(/\d+\/\d+/)) continue;
+    const [m, d] = ds.split('/').map(Number);
+    if (!row[3]) continue;
+    const total = parseInt(row[4]) || 0;
+    if (total === 0) continue;
+    const branches = {};
+    for (let i = 0; i < BRANCH_NAMES.length; i++) {
+      const v = parseInt(row[5 + i]) || 0;
+      if (v > 0) branches[BRANCH_NAMES[i]] = v;
+    }
+    const year = defaultYear || 2026;
+    rows.push({
+      date: `${year}-${String(m).padStart(2,'0')}-${String(d).padStart(2,'0')}`,
+      dayOfWeek: row[1], shift: row[2], pt: row[3], total, branches
+    });
+  }
+  return rows;
+}
+
+// ===== DATA FETCHER =====
+async function fetchSheetData() {
+  const sheets = ['留單數_2026/3', '留單數_2026/4'];
+  const allRows = [];
+  for (const sheet of sheets) {
+    try {
+      const url = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(sheet)}`;
+      const resp = await fetch(url);
+      if (resp.ok) {
+        const csv = await resp.text();
+        const yr = parseInt(sheet.match(/(\d{4})/)?.[1]) || 2026;
+        allRows.push(...parseCSV(csv, yr));
+      }
+    } catch(e) { console.warn('Failed to fetch', sheet, e); }
+  }
+  return allRows.sort((a, b) => a.date.localeCompare(b.date));
+}
+
+// ===== REFRESH =====
+async function refreshData() {
+  const btn = document.getElementById('btnRefresh');
+  btn.classList.add('loading');
+  try {
+    rawData = await fetchSheetData();
+    document.getElementById('lastUpdate').textContent = new Date().toLocaleString('zh-TW');
+    initFilters();
+    applyFilters();
+  } catch(e) {
+    alert('更新失敗：' + e.message);
+  } finally {
+    btn.classList.remove('loading');
+  }
+}
+
+// ===== FILTERS =====
+function initFilters() {
+  const ptSelect = document.getElementById('ptFilter');
+  const pts = [...new Set(rawData.map(r => r.pt))];
+  ptSelect.innerHTML = '<option value="all">全部</option>';
+  pts.forEach(p => { const o = document.createElement('option'); o.value = p; o.textContent = p; ptSelect.appendChild(o); });
+
+  const dates = rawData.map(r => r.date);
+  document.getElementById('dateFrom').value = dates[0] || '';
+  document.getElementById('dateTo').value = dates[dates.length - 1] || '';
+}
+
+function getFilteredData() {
+  const from = document.getElementById('dateFrom').value;
+  const to = document.getElementById('dateTo').value;
+  const pt = document.getElementById('ptFilter').value;
+  const shift = document.getElementById('shiftFilter').value;
+  return rawData.filter(r => {
+    if (from && r.date < from) return false;
+    if (to && r.date > to) return false;
+    if (pt !== 'all' && r.pt !== pt) return false;
+    if (shift !== 'all' && r.shift !== shift) return false;
+    return true;
+  });
+}
+
+function setQuickRange(range) {
+  document.querySelectorAll('.quick-btn').forEach(b => b.classList.remove('active'));
+  document.querySelector(`.quick-btn[data-range="${range}"]`).classList.add('active');
+  const today = new Date();
+  let from, to;
+  if (range === 'week') {
+    const dow = today.getDay();
+    const diff = dow === 0 ? 6 : dow - 1;
+    from = new Date(today); from.setDate(today.getDate() - diff);
+    to = today;
+  } else if (range === 'month') {
+    from = new Date(today.getFullYear(), today.getMonth(), 1);
+    to = today;
+  } else if (range === 'quarter') {
+    const qm = Math.floor(today.getMonth() / 3) * 3;
+    from = new Date(today.getFullYear(), qm, 1);
+    to = today;
+  } else {
+    const dates = rawData.map(r => r.date);
+    document.getElementById('dateFrom').value = dates[0] || '';
+    document.getElementById('dateTo').value = dates[dates.length - 1] || '';
+    applyFilters();
+    return;
+  }
+  document.getElementById('dateFrom').value = fmt(from);
+  document.getElementById('dateTo').value = fmt(to);
+  applyFilters();
+}
+
+function fmt(d) { return d.toISOString().slice(0, 10); }
+
+function applyFilters() {
+  const data = getFilteredData();
+  renderKPIs(data);
+  renderDailyTrend(data);
+  renderPTCompare(data);
+  renderShiftChart(data);
+  renderWeeklyTrend(data);
+  renderBranchHeatmap(data);
+  renderPTTable(data);
+  renderDailyTable(data);
+}
+
+// ===== KPIs =====
+function renderKPIs(data) {
+  const totalOrders = data.reduce((s, r) => s + r.total, 0);
+  const shiftCount = data.length;
+  const avgPerShift = shiftCount ? (totalOrders / shiftCount).toFixed(1) : 0;
+  const maxShift = data.reduce((m, r) => r.total > m.total ? r : m, { total: 0 });
+  const uniqueDays = new Set(data.map(r => r.date)).size;
+  const pts = [...new Set(data.map(r => r.pt))];
+
+  document.getElementById('kpiRow').innerHTML = `
+    <div class="kpi-card"><div class="kpi-label">總留單數</div><div class="kpi-value">${totalOrders}</div><div class="kpi-sub">${uniqueDays} 天內</div></div>
+    <div class="kpi-card"><div class="kpi-label">總值班次數</div><div class="kpi-value">${shiftCount}</div><div class="kpi-sub">${pts.length} 位值班人</div></div>
+    <div class="kpi-card"><div class="kpi-label">平均每班留單</div><div class="kpi-value">${avgPerShift}</div><div class="kpi-sub">單位：筆/班</div></div>
+    <div class="kpi-card"><div class="kpi-label">單班最高留單</div><div class="kpi-value">${maxShift.total}</div><div class="kpi-sub">${maxShift.pt || '--'} ${maxShift.date || ''}</div></div>
+    <div class="kpi-card"><div class="kpi-label">涵蓋分院數</div><div class="kpi-value">${new Set(data.flatMap(r => Object.keys(r.branches))).size}</div><div class="kpi-sub">跨院諮詢</div></div>
+  `;
+}
+
+// ===== CHARTS =====
+function destroyChart(key) { if (charts[key]) { charts[key].destroy(); delete charts[key]; } }
+
+function renderDailyTrend(data) {
+  destroyChart('dailyTrend');
+  const pts = [...new Set(data.map(r => r.pt))];
+  const dates = [...new Set(data.map(r => r.date))].sort();
+  const datasets = pts.map(pt => ({
+    label: pt,
+    data: dates.map(d => data.filter(r => r.date === d && r.pt === pt).reduce((s, r) => s + r.total, 0)),
+    borderColor: PT_COLORS[pt] || '#999',
+    backgroundColor: (PT_COLORS[pt] || '#999') + '22',
+    fill: true,
+    tension: 0.3,
+    pointRadius: 3,
+  }));
+  // Add total line
+  datasets.push({
+    label: '整體合計',
+    data: dates.map(d => data.filter(r => r.date === d).reduce((s, r) => s + r.total, 0)),
+    borderColor: '#334155',
+    borderDash: [5, 5],
+    pointRadius: 2,
+    fill: false,
+    tension: 0.3,
+  });
+  const ctx = document.getElementById('chartDailyTrend').getContext('2d');
+  charts.dailyTrend = new Chart(ctx, {
+    type: 'line',
+    data: { labels: dates.map(d => d.slice(5)), datasets },
+    options: { responsive: true, plugins: { legend: { position: 'top' } }, scales: { y: { beginAtZero: true } }, interaction: { intersect: false, mode: 'index' } }
+  });
+}
+
+function renderPTCompare(data) {
+  destroyChart('ptCompare');
+  const pts = [...new Set(data.map(r => r.pt))];
+  const stats = pts.map(pt => {
+    const rows = data.filter(r => r.pt === pt);
+    return { pt, total: rows.reduce((s, r) => s + r.total, 0), count: rows.length, avg: rows.length ? (rows.reduce((s, r) => s + r.total, 0) / rows.length).toFixed(1) : 0 };
+  });
+  const ctx = document.getElementById('chartPTCompare').getContext('2d');
+  charts.ptCompare = new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels: stats.map(s => s.pt),
+      datasets: [
+        { label: '總留單數', data: stats.map(s => s.total), backgroundColor: stats.map(s => PT_COLORS[s.pt] || '#999'), borderRadius: 6, yAxisID: 'y' },
+        { label: '平均每班', data: stats.map(s => s.avg), type: 'line', borderColor: '#f59e0b', backgroundColor: '#f59e0b', pointRadius: 6, yAxisID: 'y1' }
+      ]
+    },
+    options: {
+      responsive: true,
+      plugins: { legend: { position: 'top' } },
+      scales: { y: { beginAtZero: true, title: { display: true, text: '總留單' } }, y1: { position: 'right', beginAtZero: true, title: { display: true, text: '平均/班' }, grid: { drawOnChartArea: false } } }
+    }
+  });
+}
+
+function renderShiftChart(data) {
+  destroyChart('shift');
+  const shifts = ['早班', '午班', '晚班'];
+  const totals = shifts.map(s => data.filter(r => r.shift === s).reduce((sum, r) => sum + r.total, 0));
+  const counts = shifts.map(s => data.filter(r => r.shift === s).length);
+  const ctx = document.getElementById('chartShift').getContext('2d');
+  charts.shift = new Chart(ctx, {
+    type: 'doughnut',
+    data: {
+      labels: shifts.map((s, i) => `${s}（${counts[i]}班，共${totals[i]}筆）`),
+      datasets: [{ data: totals, backgroundColor: ['#f59e0b', '#2563eb', '#7c3aed'], borderWidth: 2, borderColor: '#fff' }]
+    },
+    options: { responsive: true, plugins: { legend: { position: 'bottom' } } }
+  });
+}
+
+function renderWeeklyTrend(data) {
+  destroyChart('weeklyTrend');
+  // Group by ISO week
+  const weekMap = {};
+  data.forEach(r => {
+    const d = new Date(r.date);
+    const oneJan = new Date(d.getFullYear(), 0, 1);
+    const wk = Math.ceil(((d - oneJan) / 86400000 + oneJan.getDay() + 1) / 7);
+    const key = `W${wk}`;
+    if (!weekMap[key]) weekMap[key] = { total: 0, count: 0, pts: {} };
+    weekMap[key].total += r.total;
+    weekMap[key].count += 1;
+    if (!weekMap[key].pts[r.pt]) weekMap[key].pts[r.pt] = 0;
+    weekMap[key].pts[r.pt] += r.total;
+  });
+  const weeks = Object.keys(weekMap).sort();
+  const pts = [...new Set(data.map(r => r.pt))];
+  const datasets = pts.map(pt => ({
+    label: pt,
+    data: weeks.map(w => weekMap[w].pts[pt] || 0),
+    backgroundColor: PT_COLORS[pt] || '#999',
+    borderRadius: 4,
+  }));
+  const ctx = document.getElementById('chartWeeklyTrend').getContext('2d');
+  charts.weeklyTrend = new Chart(ctx, {
+    type: 'bar',
+    data: { labels: weeks, datasets },
+    options: {
+      responsive: true,
+      plugins: { legend: { position: 'top' } },
+      scales: { x: { stacked: true }, y: { stacked: true, beginAtZero: true } }
+    }
+  });
+}
+
+function renderBranchHeatmap(data) {
+  const branchTotals = {};
+  data.forEach(r => {
+    Object.entries(r.branches).forEach(([b, v]) => {
+      branchTotals[b] = (branchTotals[b] || 0) + v;
+    });
+  });
+  const sorted = Object.entries(branchTotals).sort((a, b) => b[1] - a[1]).slice(0, 20);
+  const maxVal = sorted[0]?.[1] || 1;
+  const container = document.getElementById('branchHeatmap');
+  container.innerHTML = sorted.map(([name, val]) => {
+    const intensity = Math.round((val / maxVal) * 100);
+    const hue = 220;
+    const bg = `hsl(${hue}, 80%, ${95 - intensity * 0.45}%)`;
+    const textColor = intensity > 60 ? '#fff' : '#1e293b';
+    return `<div class="heatmap-cell" style="background:${bg};color:${textColor}"><div class="branch-name">${name}</div><div class="branch-val">${val}</div></div>`;
+  }).join('');
+}
+
+// ===== TABLES =====
+function renderPTTable(data) {
+  const pts = [...new Set(data.map(r => r.pt))];
+  const maxTotal = Math.max(...pts.map(pt => data.filter(r => r.pt === pt).reduce((s, r) => s + r.total, 0)), 1);
+  const tbody = document.getElementById('ptTableBody');
+  tbody.innerHTML = pts.map((pt, i) => {
+    const rows = data.filter(r => r.pt === pt);
+    const total = rows.reduce((s, r) => s + r.total, 0);
+    const avg = rows.length ? (total / rows.length).toFixed(1) : 0;
+    const maxShift = Math.max(...rows.map(r => r.total), 0);
+    const branches = new Set(rows.flatMap(r => Object.keys(r.branches))).size;
+    const pct = (total / maxTotal * 100).toFixed(0);
+    const color = PT_COLORS[pt] || '#999';
+    return `<tr>
+      <td><span class="pt-badge pt-badge-${i}">${pt}</span></td>
+      <td>${rows.length}</td>
+      <td><strong>${total}</strong></td>
+      <td>${avg}</td>
+      <td>${maxShift}</td>
+      <td>${branches}</td>
+      <td class="bar-cell"><div class="bar-bg" style="width:${pct}%;background:${color}">${total}</div></td>
+    </tr>`;
+  }).join('');
+}
+
+function renderDailyTable(data) {
+  const tbody = document.getElementById('dailyTableBody');
+  const sorted = [...data].sort((a, b) => b.date.localeCompare(a.date) || a.shift.localeCompare(b.shift));
+  tbody.innerHTML = sorted.slice(0, 100).map(r => {
+    const branchStr = Object.entries(r.branches).map(([b, v]) => v > 1 ? `${b}(${v})` : b).join('、');
+    const ptIdx = ['張盈慧','曾鳳君','黃婕甯'].indexOf(r.pt);
+    return `<tr>
+      <td>${r.date.slice(5)}</td>
+      <td>${r.dayOfWeek}</td>
+      <td>${r.shift}</td>
+      <td><span class="pt-badge pt-badge-${ptIdx >= 0 ? ptIdx : 3}">${r.pt}</span></td>
+      <td><strong>${r.total}</strong></td>
+      <td style="font-size:12px;max-width:400px">${branchStr}</td>
+    </tr>`;
+  }).join('');
+}
+
+// ===== EVENTS =====
+document.getElementById('dateFrom').addEventListener('change', applyFilters);
+document.getElementById('dateTo').addEventListener('change', applyFilters);
+document.getElementById('ptFilter').addEventListener('change', applyFilters);
+document.getElementById('shiftFilter').addEventListener('change', applyFilters);
+
+// ===== INIT =====
+// Embed initial data to avoid first-load delay
+const INITIAL_DATA = [{"date":"2026-03-01","dayOfWeek":"日","shift":"午班","pt":"張盈慧","total":6,"branches":{"竹北":1,"豐原":2,"海安":1,"頭份":1,"文化中心":1}},{"date":"2026-03-01","dayOfWeek":"日","shift":"晚班","pt":"張盈慧","total":8,"branches":{"忠孝新生":1,"板橋":1,"竹北":2,"北大":1,"文山":2,"大里":1}},{"date":"2026-03-02","dayOfWeek":"一","shift":"早班","pt":"曾鳳君","total":4,"branches":{"古亭":1,"藝文":1,"中壢":1,"汐止":1}},{"date":"2026-03-02","dayOfWeek":"一","shift":"午班","pt":"張盈慧","total":9,"branches":{"板橋":1,"三重":1,"蘆洲":1,"黎明":1,"海安":1,"文山":1,"頭份":1,"文化中心":1,"大里":1}},{"date":"2026-03-02","dayOfWeek":"一","shift":"晚班","pt":"張盈慧","total":5,"branches":{"三重":1,"新莊":1,"藝文":1,"西門":1,"文化中心":1}},{"date":"2026-03-03","dayOfWeek":"二","shift":"早班","pt":"曾鳳君","total":6,"branches":{"內湖":1,"林口":1,"竹北":1,"汐止":1,"北大":1,"海安":1}},{"date":"2026-03-03","dayOfWeek":"二","shift":"午班","pt":"曾鳳君","total":6,"branches":{"板橋":1,"雙和":1,"信義":1,"文山":1,"土城":1,"文化中心":1}},{"date":"2026-03-03","dayOfWeek":"二","shift":"晚班","pt":"張盈慧","total":10,"branches":{"古亭":1,"信義":1,"文心":1,"藝文":2,"黎明":1,"西門":1,"中壢":2,"海安":1}},{"date":"2026-03-04","dayOfWeek":"三","shift":"早班","pt":"曾鳳君","total":8,"branches":{"忠孝新生":1,"三重":1,"藝文":1,"南崁":1,"竹北":1,"文山":1,"文化中心":1,"大里":1}},{"date":"2026-03-04","dayOfWeek":"三","shift":"午班","pt":"曾鳳君","total":7,"branches":{"天母":1,"板橋":1,"雙和":1,"博愛明誠":1,"文山":1,"大里":1,"南港":1}},{"date":"2026-03-04","dayOfWeek":"三","shift":"晚班","pt":"黃婕甯","total":15,"branches":{"天母":1,"林口":1,"文心":1,"藝文":1,"蘆洲":1,"黎明":1,"竹北":1,"豐原":1,"博愛明誠":1,"海安":1,"頭份":1,"文化中心":1,"大里":1,"南港":2}},{"date":"2026-03-05","dayOfWeek":"四","shift":"早班","pt":"黃婕甯","total":12,"branches":{"忠孝新生":2,"板橋":1,"雙和":1,"信義":1,"藝文":1,"南崁":1,"竹北":1,"汐止":1,"博愛明誠":1,"文山":1,"大里":1}},{"date":"2026-03-09","dayOfWeek":"一","shift":"早班","pt":"曾鳳君","total":8,"branches":{"信義":1,"新莊":1,"文心":1,"蘆洲":1,"竹北":1,"汐止":1,"博愛明誠":1,"文山":1}},{"date":"2026-03-09","dayOfWeek":"一","shift":"午班","pt":"曾鳳君","total":9,"branches":{"忠孝新生":1,"天母":1,"板橋":1,"竹北":1,"博愛明誠":1,"文山":1,"文化中心":1,"大里":2}},{"date":"2026-03-12","dayOfWeek":"四","shift":"早班","pt":"黃婕甯","total":12,"branches":{"內湖":1,"信義":1,"新莊":1,"蘆洲":1,"竹北":1,"汐止":1,"博愛明誠":1,"新店":2,"文山":1,"大里":1,"南港":1}},{"date":"2026-03-12","dayOfWeek":"四","shift":"午班","pt":"黃婕甯","total":11,"branches":{"板橋":2,"雙和":1,"林口":1,"藝文":1,"博愛明誠":1,"頭份":1,"文化中心":1,"大里":3}},{"date":"2026-03-13","dayOfWeek":"五","shift":"晚班","pt":"黃婕甯","total":6,"branches":{"忠孝新生":1,"天母":1,"雙和":1,"藝文":1,"蘆洲":1,"文山":1}},{"date":"2026-03-14","dayOfWeek":"六","shift":"早班","pt":"黃婕甯","total":10,"branches":{"忠孝新生":1,"板橋":1,"雙和":1,"信義":1,"藝文":1,"竹北":1,"博愛明誠":1,"頭份":1,"文化中心":2}},{"date":"2026-03-14","dayOfWeek":"六","shift":"午班","pt":"黃婕甯","total":7,"branches":{"天母":1,"雙和":1,"藝文":1,"博愛明誠":1,"文山":2,"文化中心":1}},{"date":"2026-03-14","dayOfWeek":"六","shift":"晚班","pt":"張盈慧","total":10,"branches":{"板橋":1,"雙和":1,"三重":1,"藝文":3,"中壢":1,"博愛明誠":1,"文山":1,"大里":1}},{"date":"2026-03-15","dayOfWeek":"日","shift":"午班","pt":"張盈慧","total":9,"branches":{"內湖":1,"林口":1,"藝文":2,"黎明":1,"竹北":2,"豐原":1,"大里":1}},{"date":"2026-03-15","dayOfWeek":"日","shift":"晚班","pt":"張盈慧","total":9,"branches":{"信義":1,"新莊":1,"藝文":2,"蘆洲":1,"中壢":1,"竹北":1,"頭份":1,"文化中心":1}},{"date":"2026-03-17","dayOfWeek":"二","shift":"早班","pt":"曾鳳君","total":7,"branches":{"古亭":1,"文心":1,"崇德":1,"竹北":1,"豐原":1,"海安":1,"文化中心":1}},{"date":"2026-03-17","dayOfWeek":"二","shift":"午班","pt":"曾鳳君","total":20,"branches":{"內湖":1,"板橋":2,"雙和":1,"三重":2,"信義":2,"藝文":1,"蘆洲":1,"南崁":1,"中壢":2,"汐止":1,"博愛明誠":2,"海安":1,"平鎮":1,"文山":1,"頭份":1}},{"date":"2026-03-17","dayOfWeek":"二","shift":"晚班","pt":"黃婕甯","total":12,"branches":{"板橋":1,"文心":1,"萬芳":1,"崇德":1,"蘆洲":1,"黎明":1,"竹北":1,"豐原":1,"博愛明誠":1,"海安":1,"文化中心":1,"大里":1}},{"date":"2026-03-18","dayOfWeek":"三","shift":"早班","pt":"曾鳳君","total":5,"branches":{"天母":1,"內湖":1,"板橋":1,"信義":1,"文化中心":1}},{"date":"2026-03-18","dayOfWeek":"三","shift":"午班","pt":"曾鳳君","total":12,"branches":{"天母":1,"板橋":1,"三重":1,"信義":1,"蘆洲":1,"西門":1,"中壢":1,"竹北":1,"汐止":1,"博愛明誠":1,"海安":1,"文化中心":1}},{"date":"2026-03-18","dayOfWeek":"三","shift":"晚班","pt":"張盈慧","total":11,"branches":{"板橋":1,"古亭":1,"藝文":2,"西門":1,"中壢":1,"竹北":1,"豐原":2,"海安":1,"文山":1}},{"date":"2026-03-19","dayOfWeek":"四","shift":"早班","pt":"黃婕甯","total":10,"branches":{"天母":1,"板橋":1,"雙和":1,"信義":1,"藝文":1,"西門":1,"博愛明誠":1,"文山":1,"文化中心":1,"大里":1}},{"date":"2026-03-19","dayOfWeek":"四","shift":"午班","pt":"黃婕甯","total":11,"branches":{"板橋":1,"林口":1,"新店":1,"三重":1,"文心":1,"藝文":2,"蘆洲":1,"南崁":1,"中壢":1,"大里":1}},{"date":"2026-03-19","dayOfWeek":"四","shift":"晚班","pt":"張盈慧","total":13,"branches":{"天母":1,"板橋":1,"信義":1,"新莊":1,"崇德":1,"蘆洲":1,"黎明":1,"中壢":2,"竹北":1,"博愛明誠":2,"文山":1}},{"date":"2026-03-20","dayOfWeek":"五","shift":"晚班","pt":"張盈慧","total":16,"branches":{"板橋":1,"信義":1,"萬芳":1,"藝文":1,"中壢":4,"竹北":2,"豐原":1,"博愛明誠":1,"海安":1,"文山":2,"頭份":1,"文化中心":1}},{"date":"2026-03-21","dayOfWeek":"六","shift":"早班","pt":"黃婕甯","total":9,"branches":{"雙和":1,"信義":1,"藝文":1,"中壢":2,"竹北":1,"博愛明誠":1,"文山":1,"頭份":1}},{"date":"2026-03-21","dayOfWeek":"六","shift":"午班","pt":"黃婕甯","total":14,"branches":{"板橋":1,"雙和":1,"林口":1,"新店":1,"藝文":2,"蘆洲":1,"中壢":1,"竹北":1,"汐止":1,"博愛明誠":2,"文山":1,"大里":1}},{"date":"2026-03-21","dayOfWeek":"六","shift":"晚班","pt":"張盈慧","total":12,"branches":{"板橋":1,"雙和":1,"藝文":1,"黎明":1,"南京":1,"中壢":2,"竹北":1,"豐原":1,"博愛明誠":1,"海安":1,"文化中心":1}},{"date":"2026-03-22","dayOfWeek":"日","shift":"午班","pt":"張盈慧","total":11,"branches":{"忠孝新生":1,"板橋":1,"雙和":1,"新店":1,"古亭":1,"文心":1,"萬芳":1,"藝文":4,"中壢":1,"汐止":1,"博愛明誠":2,"文山":2}},{"date":"2026-03-22","dayOfWeek":"日","shift":"晚班","pt":"張盈慧","total":14,"branches":{"忠孝新生":1,"內湖":1,"崇德":1,"中壢":4,"博愛明誠":2,"平鎮":1,"土城":1,"文化中心":3}},{"date":"2026-03-23","dayOfWeek":"一","shift":"晚班","pt":"張盈慧","total":20,"branches":{"天母":1,"板橋":1,"信義":1,"新莊":1,"崇德":1,"藝文":1,"蘆洲":2,"西門":1,"中壢":3,"竹北":1,"博愛明誠":2,"平鎮":1,"文山":3,"頭份":1}},{"date":"2026-03-25","dayOfWeek":"二","shift":"早班","pt":"曾鳳君","total":5,"branches":{"天母":1,"板橋":1,"中壢":1,"竹北":1,"大里":1}},{"date":"2026-03-25","dayOfWeek":"二","shift":"午班","pt":"曾鳳君","total":15,"branches":{"天母":1,"內湖":1,"三重":2,"信義":2,"南崁":1,"西門":1,"汐止":1,"博愛明誠":3,"頭份":1,"文化中心":1,"大里":1}},{"date":"2026-03-26","dayOfWeek":"三","shift":"早班","pt":"曾鳳君","total":15,"branches":{"板橋":1,"雙和":1,"林口":1,"信義":1,"藝文":1,"南崁":2,"竹北":1,"汐止":1,"平鎮":2,"文山":1,"頭份":2,"大里":1}},{"date":"2026-03-26","dayOfWeek":"三","shift":"午班","pt":"曾鳳君","total":13,"branches":{"板橋":2,"新莊":2,"蘆洲":2,"西門":2,"汐止":1,"豐原":1,"博愛明誠":1,"文化中心":2}},{"date":"2026-03-27","dayOfWeek":"五","shift":"晚班","pt":"張盈慧","total":16,"branches":{"忠孝新生":1,"天母":1,"板橋":1,"雙和":1,"三重":1,"信義":1,"文心":1,"藝文":1,"蘆洲":1,"黎明":1,"中壢":2,"竹北":1,"文山":1,"土城":1,"大里":1}},{"date":"2026-03-28","dayOfWeek":"六","shift":"早班","pt":"黃婕甯","total":10,"branches":{"板橋":2,"三重":1,"信義":1,"藝文":1,"蘆洲":1,"南崁":1,"博愛明誠":1,"文山":1,"大里":1}},{"date":"2026-03-28","dayOfWeek":"六","shift":"午班","pt":"黃婕甯","total":14,"branches":{"板橋":1,"雙和":2,"藝文":2,"蘆洲":1,"中壢":1,"竹北":1,"汐止":1,"北大":1,"豐原":1,"博愛明誠":1,"海安":1,"大里":1}},{"date":"2026-03-28","dayOfWeek":"六","shift":"晚班","pt":"張盈慧","total":17,"branches":{"板橋":1,"雙和":1,"林口":1,"三重":1,"藝文":3,"蘆洲":1,"黎明":1,"中壢":2,"竹北":1,"博愛明誠":1,"海安":1,"平鎮":1,"文化中心":1,"大里":1}},{"date":"2026-03-29","dayOfWeek":"日","shift":"午班","pt":"張盈慧","total":15,"branches":{"板橋":1,"雙和":1,"新店":1,"古亭":1,"文心":1,"萬芳":1,"藝文":4,"中壢":1,"汐止":1,"博愛明誠":2,"文山":2}},{"date":"2026-03-29","dayOfWeek":"日","shift":"晚班","pt":"張盈慧","total":16,"branches":{"忠孝新生":1,"板橋":1,"雙和":1,"藝文":1,"蘆洲":1,"黎明":1,"中壢":3,"竹北":1,"博愛明誠":1,"平鎮":1,"文山":1,"頭份":1,"文化中心":2}},{"date":"2026-03-31","dayOfWeek":"二","shift":"早班","pt":"黃婕甯","total":8,"branches":{"新店":1,"崇德":1,"中壢":1,"豐原":3,"海安":1,"大里":1}},{"date":"2026-03-31","dayOfWeek":"二","shift":"午班","pt":"黃婕甯","total":13,"branches":{"板橋":1,"雙和":1,"林口":1,"三重":1,"藝文":2,"蘆洲":1,"南京":1,"中壢":1,"博愛明誠":2,"大里":2}},{"date":"2026-03-31","dayOfWeek":"二","shift":"晚班","pt":"張盈慧","total":15,"branches":{"板橋":1,"雙和":1,"文心":2,"藝文":1,"黎明":1,"竹北":3,"豐原":1,"博愛明誠":1,"海安":1,"文山":1,"文化中心":1,"大里":1}},{"date":"2026-04-01","dayOfWeek":"三","shift":"早班","pt":"黃婕甯","total":16,"branches":{"雙和":1,"文心":1,"崇德":1,"藝文":1,"南崁":2,"西門":1,"竹北":2,"豐原":1,"博愛明誠":1,"海安":1,"文山":1,"文化中心":1,"大里":1,"南港":1}},{"date":"2026-04-01","dayOfWeek":"三","shift":"午班","pt":"曾鳳君","total":6,"branches":{"信義":1,"藝文":1,"蘆洲":1,"西門":1,"文山":1,"大里":1}},{"date":"2026-04-01","dayOfWeek":"三","shift":"晚班","pt":"張盈慧","total":14,"branches":{"民生":1,"板橋":1,"雙和":1,"三重":1,"新莊":1,"黎明":1,"西門":1,"竹北":1,"汐止":1,"豐原":2,"博愛明誠":1,"海安":1,"大里":1}},{"date":"2026-04-02","dayOfWeek":"四","shift":"早班","pt":"曾鳳君","total":7,"branches":{"文心":1,"黎明":1,"竹北":2,"文山":1,"頭份":1,"文化中心":1}},{"date":"2026-04-02","dayOfWeek":"四","shift":"午班","pt":"曾鳳君","total":10,"branches":{"信義":1,"文心":1,"蘆洲":1,"竹北":1,"博愛明誠":2,"海安":2,"文山":1,"頭份":2}},{"date":"2026-04-02","dayOfWeek":"四","shift":"晚班","pt":"張盈慧","total":13,"branches":{"林口":1,"文心":1,"藝文":1,"黎明":1,"中壢":1,"豐原":1,"博愛明誠":1,"海安":2,"文山":1,"文化中心":2,"大里":1}},{"date":"2026-04-03","dayOfWeek":"五","shift":"早班","pt":"黃婕甯","total":9,"branches":{"民生":1,"板橋":1,"文心":1,"黎明":1,"西門":1,"竹北":1,"博愛明誠":1,"海安":1,"文山":1}},{"date":"2026-04-03","dayOfWeek":"五","shift":"午班","pt":"黃婕甯","total":6,"branches":{"崇德":1,"藝文":2,"竹北":1,"博愛明誠":1,"文山":1}},{"date":"2026-04-03","dayOfWeek":"五","shift":"晚班","pt":"張盈慧","total":19,"branches":{"內湖":1,"三重":1,"文心":1,"黎明":1,"南京":1,"中壢":3,"竹北":1,"豐原":1,"博愛明誠":3,"文山":1,"頭份":1,"土城":2,"大里":2}}];
+
+rawData = INITIAL_DATA;
+document.getElementById('lastUpdate').textContent = new Date().toLocaleString('zh-TW');
+initFilters();
+setQuickRange('all');
+</script>
+</body>
+</html>
