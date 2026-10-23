@@ -3,7 +3,7 @@
  *
  * 流程：01_收件匣 內的 .txt → Parser.gs 解析 → 去重 → 寫入「訊息」「聊天室」→ 檔案移到 02_已匯入 → 寫「匯入紀錄」
  *
- * 安裝步驟見 line-tracking/README.md。首次使用：執行 setup() → installTrigger()。
+ * 安裝步驟見 line-tracking/README.md。首次使用：執行 setup()（會同時安裝每 15 分鐘的排程）。
  */
 
 var CONFIG = {
@@ -63,7 +63,8 @@ function setup() {
   if (def && def.getLastRow() === 0 && ss.getSheets().length > 4) ss.deleteSheet(def);
 
   ss.setActiveSheet(chats);
-  Logger.log('setup 完成');
+  installTrigger();
+  Logger.log('setup 完成（工作表已建立、排程已安裝）');
 }
 
 function ensureSheet_(ss, name, headers) {
