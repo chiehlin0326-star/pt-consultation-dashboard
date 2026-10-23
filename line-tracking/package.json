@@ -1,0 +1,9 @@
+{
+  "name": "line-conversation-tracking",
+  "private": true,
+  "description": "LINE 聊天記錄匯出檔 → Google Sheets 追蹤管線（Apps Script + Node 測試）",
+  "scripts": {
+    "test": "node --test parser/tests/parser.test.js",
+    "parse": "node parser/cli.js"
+  }
+}
