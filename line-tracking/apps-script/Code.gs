@@ -50,6 +50,7 @@ function onOpen() {
 /** 建立四張工作表與標題列；可重複執行，不會動到既有資料。 */
 function setup() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
+  ensureTimeZone_(ss);
   var chats = ensureSheet_(ss, CONFIG.SHEETS.CHATS, HEADERS.CHATS);
   var msgs = ensureSheet_(ss, CONFIG.SHEETS.MESSAGES, HEADERS.MESSAGES);
   var tasks = ensureSheet_(ss, CONFIG.SHEETS.TASKS, HEADERS.TASKS);
@@ -131,6 +132,12 @@ function writeSettings_(ss, folders) {
   sh.setColumnWidth(2, 520);
 }
 
+/** 試算表時區預設跟著 Google 帳號（常是美國），匯入時間會差 15 小時；統一改為台北。 */
+function ensureTimeZone_(ss) {
+  if (ss.getSpreadsheetTimeZone() !== 'Asia/Taipei') ss.setSpreadsheetTimeZone('Asia/Taipei');
+  if (ss.getSpreadsheetLocale() !== 'zh_TW') ss.setSpreadsheetLocale('zh_TW');
+}
+
 function ensureSheet_(ss, name, headers) {
   var sh = ss.getSheetByName(name);
   if (!sh) sh = ss.insertSheet(name);
@@ -161,6 +168,7 @@ function processInbox() {
   var lock = LockService.getScriptLock();
   if (!lock.tryLock(5000)) { Logger.log('另一個匯入正在執行，略過'); return; }
   try {
+    ensureTimeZone_(SpreadsheetApp.getActiveSpreadsheet());
     var folders = getFolders_();
     var inbox = folders.inbox;
     var archive = folders.archive;
