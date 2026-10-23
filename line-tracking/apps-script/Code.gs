@@ -2,19 +2,26 @@
  * LINE 對話追蹤：Google Apps Script 匯入管線（容器綁定於「LINE 對話追蹤」試算表）
  *
  * 流程：01_收件匣 內的 .txt → Parser.gs 解析 → 去重 → 寫入「訊息」「聊天室」→ 檔案移到 02_已匯入 → 寫「匯入紀錄」
+ * 資料夾由 setup() 自動建立在試算表所在的 Drive，連結寫在「設定」工作表。
  *
  * 安裝步驟見 line-tracking/README.md。首次使用：執行 setup()（會同時安裝每 15 分鐘的排程）。
  */
 
 var CONFIG = {
-  INBOX_FOLDER_ID: '1t7G20OJY9ZWo8t9haZj14BkujBhyRRbO',   // LINE對話追蹤/01_收件匣（匯出檔放這裡）
-  ARCHIVE_FOLDER_ID: '1S01XcZMwRC6xQEjFveJ6Ba_1wlsIJC4y', // LINE對話追蹤/02_已匯入
+  // 資料夾由 setup() 在試算表所在的 Drive 自動建立（ID 存在 Script Properties）。
+  // 若要改用既有資料夾，填入 ID 即可覆蓋。
+  INBOX_FOLDER_ID: '',
+  ARCHIVE_FOLDER_ID: '',
+  ROOT_FOLDER_NAME: 'LINE對話追蹤',
+  INBOX_FOLDER_NAME: '01_收件匣（匯出檔放這裡）',
+  ARCHIVE_FOLDER_NAME: '02_已匯入',
   TRIGGER_MINUTES: 15,
   SHEETS: {
     CHATS: '聊天室',
     MESSAGES: '訊息',
     TASKS: '追蹤事項',
-    LOG: '匯入紀錄'
+    LOG: '匯入紀錄',
+    SETTINGS: '設定'
   },
   CHAT_TYPES: ['未分類', '業務合作', '客戶諮詢', '內部團隊', '其他'],
   TASK_STATUS: ['待辦', '進行中', '完成', '取消']
@@ -24,7 +31,8 @@ var HEADERS = {
   CHATS: ['聊天室', '類型', '對口／備註', '分院', '首則訊息日期', '最後訊息日期', '訊息數', '最後匯入時間'],
   MESSAGES: ['訊息ID', '日期', '時間', '聊天室', '發話者', '類型', '內容', '來源檔案', '匯入時間'],
   TASKS: ['建立日期', '聊天室', '事項', '負責人', '期限', '狀態', '來源訊息ID', '備註'],
-  LOG: ['匯入時間', '檔名', '聊天室', '解析訊息數', '新增', '重複略過', '狀態', '訊息']
+  LOG: ['匯入時間', '檔名', '聊天室', '解析訊息數', '新增', '重複略過', '狀態', '訊息'],
+  SETTINGS: ['項目', '值']
 };
 
 // ---------------------------------------------------------------- 選單
@@ -46,6 +54,7 @@ function setup() {
   var msgs = ensureSheet_(ss, CONFIG.SHEETS.MESSAGES, HEADERS.MESSAGES);
   var tasks = ensureSheet_(ss, CONFIG.SHEETS.TASKS, HEADERS.TASKS);
   ensureSheet_(ss, CONFIG.SHEETS.LOG, HEADERS.LOG);
+  ensureSheet_(ss, CONFIG.SHEETS.SETTINGS, HEADERS.SETTINGS);
 
   // 下拉選單
   chats.getRange(2, 2, chats.getMaxRows() - 1, 1).setDataValidation(
@@ -60,11 +69,66 @@ function setup() {
 
   // 預設工作表「工作表1」若還是空的就刪掉
   var def = ss.getSheetByName('工作表1') || ss.getSheetByName('Sheet1');
-  if (def && def.getLastRow() === 0 && ss.getSheets().length > 4) ss.deleteSheet(def);
+  if (def && def.getLastRow() === 0 && ss.getSheets().length > 5) ss.deleteSheet(def);
+
+  var folders = getFolders_();
+  installTrigger();
+  writeSettings_(ss, folders);
 
   ss.setActiveSheet(chats);
-  installTrigger();
-  Logger.log('setup 完成（工作表已建立、排程已安裝）');
+  Logger.log('setup 完成：工作表、資料夾與排程皆已就緒');
+}
+
+/** 取得（必要時建立）收件匣與歸檔資料夾。優先順序：CONFIG 指定 ID → Script Properties → 自動建立。 */
+function getFolders_() {
+  var props = PropertiesService.getScriptProperties();
+  var inbox = tryFolder_(CONFIG.INBOX_FOLDER_ID || props.getProperty('INBOX_FOLDER_ID'));
+  var archive = tryFolder_(CONFIG.ARCHIVE_FOLDER_ID || props.getProperty('ARCHIVE_FOLDER_ID'));
+  if (inbox && archive) return { inbox: inbox, archive: archive };
+
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var ssFile = DriveApp.getFileById(ss.getId());
+  var parents = ssFile.getParents();
+  var parent = parents.hasNext() ? parents.next() : DriveApp.getRootFolder();
+  var root;
+  if (parent.getName() === CONFIG.ROOT_FOLDER_NAME) {
+    root = parent;
+  } else {
+    root = findOrCreateFolder_(parent, CONFIG.ROOT_FOLDER_NAME);
+    ssFile.moveTo(root); // 把試算表一起收進專案資料夾
+  }
+  inbox = inbox || findOrCreateFolder_(root, CONFIG.INBOX_FOLDER_NAME);
+  archive = archive || findOrCreateFolder_(root, CONFIG.ARCHIVE_FOLDER_NAME);
+  props.setProperties({ INBOX_FOLDER_ID: inbox.getId(), ARCHIVE_FOLDER_ID: archive.getId() });
+  return { inbox: inbox, archive: archive };
+}
+
+function tryFolder_(id) {
+  if (!id) return null;
+  try { return DriveApp.getFolderById(id); } catch (e) { return null; }
+}
+
+function findOrCreateFolder_(parent, name) {
+  var it = parent.getFoldersByName(name);
+  return it.hasNext() ? it.next() : parent.createFolder(name);
+}
+
+/** 把實際使用的資源連結寫進「設定」工作表，方便人與 Claude 查看。 */
+function writeSettings_(ss, folders) {
+  var sh = ss.getSheetByName(CONFIG.SHEETS.SETTINGS);
+  if (!sh) return;
+  var rows = [
+    ['試算表帳號', Session.getEffectiveUser().getEmail()],
+    ['試算表', ss.getUrl()],
+    ['收件匣（匯出檔放這裡）', folders.inbox.getUrl()],
+    ['已匯入（自動歸檔）', folders.archive.getUrl()],
+    ['自動排程', '每 ' + CONFIG.TRIGGER_MINUTES + ' 分鐘掃描收件匣'],
+    ['解析器版本', LINE_PARSER_VERSION],
+    ['最後 setup 時間', new Date()]
+  ];
+  if (sh.getLastRow() > 1) sh.getRange(2, 1, sh.getLastRow() - 1, 2).clearContent();
+  sh.getRange(2, 1, rows.length, 2).setValues(rows);
+  sh.setColumnWidth(2, 520);
 }
 
 function ensureSheet_(ss, name, headers) {
@@ -97,8 +161,9 @@ function processInbox() {
   var lock = LockService.getScriptLock();
   if (!lock.tryLock(5000)) { Logger.log('另一個匯入正在執行，略過'); return; }
   try {
-    var inbox = DriveApp.getFolderById(CONFIG.INBOX_FOLDER_ID);
-    var archive = DriveApp.getFolderById(CONFIG.ARCHIVE_FOLDER_ID);
+    var folders = getFolders_();
+    var inbox = folders.inbox;
+    var archive = folders.archive;
     var files = inbox.getFiles();
     var count = 0;
     while (files.hasNext()) {
