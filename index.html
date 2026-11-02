@@ -76,6 +76,7 @@
   .pt-badge-0 { background:#dbeafe; color:#1d4ed8; }
   .pt-badge-1 { background:#dcfce7; color:#15803d; }
   .pt-badge-2 { background:#fef3c7; color:#b45309; }
+  .pt-badge-3 { background:#ede9fe; color:#6d28d9; }
   .bar-cell { position:relative; min-width:120px; }
   .bar-bg { height:22px; border-radius:4px; display:flex; align-items:center; padding:0 8px; font-size:12px; font-weight:600; color:#fff; }
 
@@ -214,23 +215,53 @@ const PT_COLORS = { '張盈慧':'#2563eb', '曾鳳君':'#16a34a', '黃婕甯':'#
 let rawData = [];
 let charts = {};
 
+// ===== HELPERS =====
+const PT_ORDER = ['張盈慧','曾鳳君','黃婕甯'];
+const FALLBACK_COLORS = ['#0891b2','#db2777','#65a30d','#9333ea','#ca8a04'];
+function ptColor(pt) {
+  if (PT_COLORS[pt]) return PT_COLORS[pt];
+  let h = 0;
+  for (const ch of String(pt)) h = (h * 31 + ch.codePointAt(0)) >>> 0;
+  return FALLBACK_COLORS[h % FALLBACK_COLORS.length];
+}
+function ptBadgeIdx(pt) { const i = PT_ORDER.indexOf(pt); return i >= 0 ? i : 3; }
+function escapeHTML(v) {
+  return String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
 // ===== CSV PARSER =====
-function parseCSV(csv, defaultYear, defaultMonth) {
-  const lines = csv.split('\n').filter(l => l.trim());
+// RFC 4180：支援 "" 跳脫、儲存格內換行、CRLF
+function splitCSV(csv) {
   const rows = [];
-  for (const line of lines) {
-    const row = [];
-    let inQ = false, cell = '';
-    for (let i = 0; i < line.length; i++) {
-      if (line[i] === '"') inQ = !inQ;
-      else if (line[i] === ',' && !inQ) { row.push(cell); cell = ''; }
-      else cell += line[i];
-    }
-    row.push(cell);
-    const ds = row[0];
-    if (!ds || !ds.match(/\d+\/\d+/)) continue;
-    const [m, d] = ds.split('/').map(Number);
-    if (!row[3]) continue;
+  let row = [], cell = '', inQ = false;
+  for (let i = 0; i < csv.length; i++) {
+    const c = csv[i];
+    if (inQ) {
+      if (c === '"') {
+        if (csv[i + 1] === '"') { cell += '"'; i++; } else inQ = false;
+      } else cell += c;
+    } else if (c === '"') inQ = true;
+    else if (c === ',') { row.push(cell); cell = ''; }
+    else if (c === '\n' || c === '\r') {
+      if (c === '\r' && csv[i + 1] === '\n') i++;
+      row.push(cell); rows.push(row); row = []; cell = '';
+    } else cell += c;
+  }
+  if (cell !== '' || row.length) { row.push(cell); rows.push(row); }
+  return rows;
+}
+
+// expectMonth：只保留該月份的列。gviz 找不到工作表時會回傳第一張表，用這個擋掉重複資料
+function parseCSV(csv, year, expectMonth) {
+  const rows = [];
+  for (const row of splitCSV(csv)) {
+    const ds = (row[0] || '').trim();
+    const md = ds.match(/^(\d{1,2})\/(\d{1,2})/);
+    if (!md) continue;
+    const m = Number(md[1]), d = Number(md[2]);
+    if (expectMonth && m !== expectMonth) continue;
+    const pt = (row[3] || '').trim();
+    if (!pt) continue;
     const total = parseInt(row[4]) || 0;
     if (total === 0) continue;
     const branches = {};
@@ -238,31 +269,48 @@ function parseCSV(csv, defaultYear, defaultMonth) {
       const v = parseInt(row[5 + i]) || 0;
       if (v > 0) branches[BRANCH_NAMES[i]] = v;
     }
-    const year = defaultYear || 2026;
     rows.push({
       date: `${year}-${String(m).padStart(2,'0')}-${String(d).padStart(2,'0')}`,
-      dayOfWeek: row[1], shift: row[2], pt: row[3], total, branches
+      dayOfWeek: (row[1] || '').trim(), shift: (row[2] || '').trim(), pt, total, branches
     });
   }
   return rows;
 }
 
 // ===== DATA FETCHER =====
-async function fetchSheetData() {
-  const sheets = ['留單數_2026/3', '留單數_2026/4'];
-  const allRows = [];
-  for (const sheet of sheets) {
-    try {
-      const url = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(sheet)}`;
-      const resp = await fetch(url);
-      if (resp.ok) {
-        const csv = await resp.text();
-        const yr = parseInt(sheet.match(/(\d{4})/)?.[1]) || 2026;
-        allRows.push(...parseCSV(csv, yr));
-      }
-    } catch(e) { console.warn('Failed to fetch', sheet, e); }
+// 工作表命名規則：留單數_YYYY/M，自 2026/3 起逐月抓到本月
+const FIRST_SHEET = { year: 2026, month: 3 };
+function sheetList(now = new Date()) {
+  const list = [];
+  let y = FIRST_SHEET.year, m = FIRST_SHEET.month;
+  while (y < now.getFullYear() || (y === now.getFullYear() && m <= now.getMonth() + 1)) {
+    list.push({ name: `留單數_${y}/${m}`, year: y, month: m });
+    if (++m > 12) { m = 1; y++; }
   }
-  return allRows.sort((a, b) => a.date.localeCompare(b.date));
+  return list;
+}
+
+async function fetchSheetData() {
+  const results = await Promise.all(sheetList().map(async s => {
+    try {
+      const url = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(s.name)}`;
+      const resp = await fetch(url);
+      if (!resp.ok) return { rows: [], ok: false };
+      return { rows: parseCSV(await resp.text(), s.year, s.month), ok: true };
+    } catch (e) {
+      console.warn('Failed to fetch', s.name, e);
+      return { rows: [], ok: false };
+    }
+  }));
+  const seen = new Set();
+  const allRows = [];
+  for (const r of results.flatMap(x => x.rows)) {
+    const key = `${r.date}|${r.shift}|${r.pt}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    allRows.push(r);
+  }
+  return { rows: allRows.sort((a, b) => a.date.localeCompare(b.date)), failed: results.filter(x => !x.ok).length };
 }
 
 // ===== REFRESH =====
@@ -270,10 +318,15 @@ async function refreshData() {
   const btn = document.getElementById('btnRefresh');
   btn.classList.add('loading');
   try {
-    rawData = await fetchSheetData();
-    document.getElementById('lastUpdate').textContent = new Date().toLocaleString('zh-TW');
+    const { rows, failed } = await fetchSheetData();
+    if (!rows.length) {
+      alert('更新失敗：沒有取得任何資料，畫面維持原本的數據。請確認試算表的共用設定與網路連線。');
+      return;
+    }
+    rawData = rows;
+    document.getElementById('lastUpdate').textContent = new Date().toLocaleString('zh-TW') + (failed ? `（${failed} 張工作表讀取失敗）` : '');
     initFilters();
-    applyFilters();
+    setQuickRange('all');
   } catch(e) {
     alert('更新失敗：' + e.message);
   } finally {
@@ -336,7 +389,8 @@ function setQuickRange(range) {
   applyFilters();
 }
 
-function fmt(d) { return d.toISOString().slice(0, 10); }
+// 用本地日期組字串；toISOString() 會轉成 UTC，在台灣會早一天
+function fmt(d) { return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; }
 
 function applyFilters() {
   const data = getFilteredData();
@@ -363,7 +417,7 @@ function renderKPIs(data) {
     <div class="kpi-card"><div class="kpi-label">總留單數</div><div class="kpi-value">${totalOrders}</div><div class="kpi-sub">${uniqueDays} 天內</div></div>
     <div class="kpi-card"><div class="kpi-label">總值班次數</div><div class="kpi-value">${shiftCount}</div><div class="kpi-sub">${pts.length} 位值班人</div></div>
     <div class="kpi-card"><div class="kpi-label">平均每班留單</div><div class="kpi-value">${avgPerShift}</div><div class="kpi-sub">單位：筆/班</div></div>
-    <div class="kpi-card"><div class="kpi-label">單班最高留單</div><div class="kpi-value">${maxShift.total}</div><div class="kpi-sub">${maxShift.pt || '--'} ${maxShift.date || ''}</div></div>
+    <div class="kpi-card"><div class="kpi-label">單班最高留單</div><div class="kpi-value">${maxShift.total}</div><div class="kpi-sub">${escapeHTML(maxShift.pt || '--')} ${escapeHTML(maxShift.date || '')}</div></div>
     <div class="kpi-card"><div class="kpi-label">涵蓋分院數</div><div class="kpi-value">${new Set(data.flatMap(r => Object.keys(r.branches))).size}</div><div class="kpi-sub">跨院諮詢</div></div>
   `;
 }
@@ -378,8 +432,8 @@ function renderDailyTrend(data) {
   const datasets = pts.map(pt => ({
     label: pt,
     data: dates.map(d => data.filter(r => r.date === d && r.pt === pt).reduce((s, r) => s + r.total, 0)),
-    borderColor: PT_COLORS[pt] || '#999',
-    backgroundColor: (PT_COLORS[pt] || '#999') + '22',
+    borderColor: ptColor(pt),
+    backgroundColor: ptColor(pt) + '22',
     fill: true,
     tension: 0.3,
     pointRadius: 3,
@@ -415,7 +469,7 @@ function renderPTCompare(data) {
     data: {
       labels: stats.map(s => s.pt),
       datasets: [
-        { label: '總留單數', data: stats.map(s => s.total), backgroundColor: stats.map(s => PT_COLORS[s.pt] || '#999'), borderRadius: 6, yAxisID: 'y' },
+        { label: '總留單數', data: stats.map(s => s.total), backgroundColor: stats.map(s => ptColor(s.pt)), borderRadius: 6, yAxisID: 'y' },
         { label: '平均每班', data: stats.map(s => s.avg), type: 'line', borderColor: '#f59e0b', backgroundColor: '#f59e0b', pointRadius: 6, yAxisID: 'y1' }
       ]
     },
@@ -445,13 +499,16 @@ function renderShiftChart(data) {
 
 function renderWeeklyTrend(data) {
   destroyChart('weeklyTrend');
-  // Group by ISO week
+  // Group by ISO week（key 用 YYYY-Www 補零，排序才不會把 W10 排在 W9 前面）
   const weekMap = {};
   data.forEach(r => {
-    const d = new Date(r.date);
-    const oneJan = new Date(d.getFullYear(), 0, 1);
-    const wk = Math.ceil(((d - oneJan) / 86400000 + oneJan.getDay() + 1) / 7);
-    const key = `W${wk}`;
+    const [y, mo, da] = r.date.split('-').map(Number);
+    const d = new Date(Date.UTC(y, mo - 1, da));
+    const dow = d.getUTCDay() || 7;
+    d.setUTCDate(d.getUTCDate() + 4 - dow);
+    const isoYear = d.getUTCFullYear();
+    const wk = Math.ceil(((d - Date.UTC(isoYear, 0, 1)) / 86400000 + 1) / 7);
+    const key = `${isoYear}-W${String(wk).padStart(2, '0')}`;
     if (!weekMap[key]) weekMap[key] = { total: 0, count: 0, pts: {} };
     weekMap[key].total += r.total;
     weekMap[key].count += 1;
@@ -463,13 +520,13 @@ function renderWeeklyTrend(data) {
   const datasets = pts.map(pt => ({
     label: pt,
     data: weeks.map(w => weekMap[w].pts[pt] || 0),
-    backgroundColor: PT_COLORS[pt] || '#999',
+    backgroundColor: ptColor(pt),
     borderRadius: 4,
   }));
   const ctx = document.getElementById('chartWeeklyTrend').getContext('2d');
   charts.weeklyTrend = new Chart(ctx, {
     type: 'bar',
-    data: { labels: weeks, datasets },
+    data: { labels: weeks.map(w => w.slice(5)), datasets },
     options: {
       responsive: true,
       plugins: { legend: { position: 'top' } },
@@ -493,7 +550,7 @@ function renderBranchHeatmap(data) {
     const hue = 220;
     const bg = `hsl(${hue}, 80%, ${95 - intensity * 0.45}%)`;
     const textColor = intensity > 60 ? '#fff' : '#1e293b';
-    return `<div class="heatmap-cell" style="background:${bg};color:${textColor}"><div class="branch-name">${name}</div><div class="branch-val">${val}</div></div>`;
+    return `<div class="heatmap-cell" style="background:${bg};color:${textColor}"><div class="branch-name">${escapeHTML(name)}</div><div class="branch-val">${val}</div></div>`;
   }).join('');
 }
 
@@ -509,9 +566,9 @@ function renderPTTable(data) {
     const maxShift = Math.max(...rows.map(r => r.total), 0);
     const branches = new Set(rows.flatMap(r => Object.keys(r.branches))).size;
     const pct = (total / maxTotal * 100).toFixed(0);
-    const color = PT_COLORS[pt] || '#999';
+    const color = ptColor(pt);
     return `<tr>
-      <td><span class="pt-badge pt-badge-${i}">${pt}</span></td>
+      <td><span class="pt-badge pt-badge-${ptBadgeIdx(pt)}">${escapeHTML(pt)}</span></td>
       <td>${rows.length}</td>
       <td><strong>${total}</strong></td>
       <td>${avg}</td>
@@ -526,13 +583,12 @@ function renderDailyTable(data) {
   const tbody = document.getElementById('dailyTableBody');
   const sorted = [...data].sort((a, b) => b.date.localeCompare(a.date) || a.shift.localeCompare(b.shift));
   tbody.innerHTML = sorted.slice(0, 100).map(r => {
-    const branchStr = Object.entries(r.branches).map(([b, v]) => v > 1 ? `${b}(${v})` : b).join('、');
-    const ptIdx = ['張盈慧','曾鳳君','黃婕甯'].indexOf(r.pt);
+    const branchStr = escapeHTML(Object.entries(r.branches).map(([b, v]) => v > 1 ? `${b}(${v})` : b).join('、'));
     return `<tr>
-      <td>${r.date.slice(5)}</td>
-      <td>${r.dayOfWeek}</td>
-      <td>${r.shift}</td>
-      <td><span class="pt-badge pt-badge-${ptIdx >= 0 ? ptIdx : 3}">${r.pt}</span></td>
+      <td>${escapeHTML(r.date.slice(5))}</td>
+      <td>${escapeHTML(r.dayOfWeek)}</td>
+      <td>${escapeHTML(r.shift)}</td>
+      <td><span class="pt-badge pt-badge-${ptBadgeIdx(r.pt)}">${escapeHTML(r.pt)}</span></td>
       <td><strong>${r.total}</strong></td>
       <td style="font-size:12px;max-width:400px">${branchStr}</td>
     </tr>`;
